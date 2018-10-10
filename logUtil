@@ -40,13 +40,7 @@ public class AopAspect {
 
     }
 
-    /**
-     * 不支持方法重載 盡量接口中不要存在同名方法
-     *
-     * @param str
-     * @param classes
-     * @return
-     */
+
     private MethodParam getMethod(String str, Class[] classes) {
         MethodParam methodParam = concurrentHashMap.get(str);
         if (methodParam == null) {
@@ -66,13 +60,7 @@ public class AopAspect {
         return methodParam;
     }
 
-    /**
-     * 不支持方法重載 盡量接口中不要存在同名方法
-     *
-     * @param str
-     * @param classes
-     * @return
-     */
+
     private void addMethod(String str, Class[] classes, Method method, io.swagger.annotations.ApiOperation annotation, LogIgnore logIgnore) {
         concurrentHashMap.put(str, new MethodParam(method, classes, annotation, logIgnore));
     }
@@ -83,16 +71,17 @@ public class AopAspect {
         String methodName = jp.getSignature().getName();
         Class classes = jp.getTarget().getClass();
         Class[] classes1 = null;
+        List<Class> parames = null;
         if (jp.getArgs() != null) {
-            List<Class> list =  Arrays.stream(jp.getArgs()).map(m ->{ if(m==null) return null; return m.getClass();}).collect(Collectors.toList());
-            classes1 = list .toArray(new Class[list.size()]);
+            parames =  Arrays.stream(jp.getArgs()).map(m ->{ if(m==null) return null; return m.getClass();}).collect(Collectors.toList());
+            classes1 = parames .toArray(new Class[parames.size()]);
         }
 
         io.swagger.annotations.ApiOperation annotation = null;
         LogIgnore logIgnore = null;
 
         //獲取緩存
-        MethodParam methodParam = getMethod(methodName, classes1);
+        MethodParam methodParam = getMethod(methodName+parames, classes1);
         Method method = null;
         if (methodParam != null) {
             method = methodParam.method;
@@ -106,7 +95,7 @@ public class AopAspect {
             method = classes.getDeclaredMethod(methodName, classes1);
             annotation = method.getAnnotation(io.swagger.annotations.ApiOperation.class);
             logIgnore = method.getAnnotation(LogIgnore.class);
-            addMethod(methodName, classes1, method, annotation, logIgnore);
+            addMethod(methodName+parames, classes1, method, annotation, logIgnore);
         }
 
         if (method == null || logIgnore != null || annotation == null) {
