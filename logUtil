@@ -32,6 +32,12 @@ import java.util.stream.Collectors;
 @Slf4j
 public class AopAspect {
 
+
+    /**
+     * LogFlag 是否取反  if(logmeaning){ 标记了logFlag注解的接口不打印日志 }else{标记了logFlag注解的接口打印日志}
+     */
+    private Boolean logmeaning = true;
+
     //不考慮緩存維護問題 數據量不大
     private ConcurrentHashMap<String, MethodParam> concurrentHashMap = new ConcurrentHashMap<>();
 
@@ -61,7 +67,7 @@ public class AopAspect {
     }
 
 
-    private void addMethod(String str, Class[] classes, Method method, io.swagger.annotations.ApiOperation annotation, LogIgnore logIgnore) {
+    private void addMethod(String str, Class[] classes, Method method, io.swagger.annotations.ApiOperation annotation, LogFlag logIgnore) {
         concurrentHashMap.put(str, new MethodParam(method, classes, annotation, logIgnore));
     }
 
@@ -73,12 +79,12 @@ public class AopAspect {
         Class[] classes1 = null;
         List<Class> parames = null;
         if (jp.getArgs() != null) {
-            parames =  Arrays.stream(jp.getArgs()).map(m ->{ if(m==null) return null; return m.getClass();}).collect(Collectors.toList());
+            parames =  Arrays.stream(jp.getArgs()).map(m ->{ if(m==null){ return null;}; return m.getClass();}).collect(Collectors.toList());
             classes1 = parames .toArray(new Class[parames.size()]);
         }
 
         io.swagger.annotations.ApiOperation annotation = null;
-        LogIgnore logIgnore = null;
+        LogFlag logIgnore = null;
 
         //獲取緩存
         MethodParam methodParam = getMethod(methodName+parames, classes1);
@@ -92,13 +98,17 @@ public class AopAspect {
 
         if (method == null) {
             //反射獲取
-            method = classes.getDeclaredMethod(methodName, classes1);
+            try {
+                method = classes.getDeclaredMethod(methodName, classes1);
+            }catch (NoSuchMethodException e){
+                return jp.proceed();
+            }
             annotation = method.getAnnotation(io.swagger.annotations.ApiOperation.class);
-            logIgnore = method.getAnnotation(LogIgnore.class);
+            logIgnore = method.getAnnotation(LogFlag.class);
             addMethod(methodName+parames, classes1, method, annotation, logIgnore);
         }
 
-        if (method == null || logIgnore != null || annotation == null) {
+        if (method == null || (!logmeaning && logIgnore==null) || (logmeaning && logIgnore != null) || annotation == null) {
             //如果該方法是非公共方法或者該方法上有日志忽略注解或者該方法沒用swagger ApiOperation注解  就跳過之後的代碼
             return jp.proceed();
         }
@@ -127,11 +137,11 @@ public class AopAspect {
         Method method;
         Class[] paramClass;
         io.swagger.annotations.ApiOperation apiOperation;
-        LogIgnore logIgnore;
+        LogFlag logIgnore;
     }
 
     //日志打印忽略
-    @interface LogIgnore {
+    @interface LogFlag {
 
     }
 }
