@@ -1,4 +1,4 @@
-package cn.wine.ms.food.wine.api.controller.shop;
+package com.biz.bbc.util;
 
 import cn.wine.model.base.exception.GlobalExceptionType;
 import cn.wine.model.base.util.AssertUtils;
@@ -8,7 +8,8 @@ import com.alibaba.fastjson.JSONObject;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
-import org.assertj.core.util.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.util.FileCopyUtils;
 import org.springframework.util.StopWatch;
 import org.springframework.util.StringUtils;
@@ -17,27 +18,29 @@ import org.springframework.web.multipart.MultipartHttpServletRequest;
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.constraints.NotNull;
 import java.io.*;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.logging.Logger;
 
 /**
  * @ClassName ImportExcelParseHandleUtil
- * @Description
+ * @Description 升级版 可惜只支持2013版本的xslx 谁要是像支持2003版的  请自己动手封装
  * @Author junqi.hu
  * @Date 17:20
  * @Version 1.0
  **/
 public class ImportExcelParseHandleUtil<T> implements AutoCloseable{
     private static ExecutorService singleThreadExecutor = Executors.newSingleThreadExecutor();
-    private Logger logger = Logger.getLogger(this.getClass().getName());
+    protected Logger logger = LoggerFactory.getLogger(getClass());
     private File uploadFile ;
     private String directory;
     private List<T> dataList;
     private String messages;
     private  StopWatch stopWatch = new StopWatch("导入excel并解析处理");
+    private  FileInputStream input;
+    private  XSSFWorkbook wb;
 
     public ImportExcelParseHandleUtil(@NotNull HttpServletRequest request,@NotNull String fileParamName,@NotNull String pathName) throws IOException {
         logger.info("开始接收上传文件....");
@@ -45,9 +48,6 @@ public class ImportExcelParseHandleUtil<T> implements AutoCloseable{
         request.setCharacterEncoding("UTF-8");
         MultipartHttpServletRequest multipartRequest = (MultipartHttpServletRequest) request;
         MultipartFile file = multipartRequest.getFile(fileParamName);
-        if(file == null){
-            throw new RuntimeException("文件参数名并未提取到文件");
-        }
         String realFileName = file.getOriginalFilename();
         // 获取路径
         String ctxPath = request.getSession().getServletContext().getRealPath("/") +pathName+ "/";
@@ -67,48 +67,54 @@ public class ImportExcelParseHandleUtil<T> implements AutoCloseable{
         logger.info("开始解析excel并处理....");
         stopWatch.start("开始解析excel并处理");
 
-
-        FileInputStream input = new FileInputStream(directory); // 读取的文件路径
-        XSSFWorkbook wb = new XSSFWorkbook(new BufferedInputStream(input));
-        JSONArray objects = new JSONArray();
-        for(int k = 0; k<  wb.getNumberOfSheets(); k++){
-            Sheet sheet = wb.getSheetAt(k);
-            System.out.println("工作薄"+sheet.getSheetName());
-            // excel列名
-            List<String> fields = Lists.newArrayList();
-            for (int i = 1; i <= sheet.getLastRowNum(); i++) {// 有多少行
-                Row row = sheet.getRow(i);
-                if(i==1){
-                    for (int j = 0; j <= row.getLastCellNum(); j++){
-                        if(row.getCell(j) != null && !StringUtils.isEmpty(row.getCell(j).toString())){
-                            fields.add(row.getCell(j).toString());
+        try{
+            input = new FileInputStream(directory); // 读取的文件路径
+            wb = new XSSFWorkbook(new BufferedInputStream(input));
+            wb.close();
+            JSONArray objects = new JSONArray();
+            for(int k = 0; k<  wb.getNumberOfSheets(); k++){
+                Sheet sheet = wb.getSheetAt(k);
+                System.out.println("工作薄"+sheet.getSheetName());
+                // excel列名
+                List<String> fields = new ArrayList<>();
+                for (int i = 1; i <= sheet.getLastRowNum(); i++) {// 有多少行
+                    Row row = sheet.getRow(i);
+                    if(i==1){
+                        for (int j = 0; j <= row.getLastCellNum(); j++){
+                            if(row.getCell(j) != null && !StringUtils.isEmpty(row.getCell(j).toString())){
+                                fields.add(row.getCell(j).toString());
+                            }
+                        }
+                        continue;
+                    }
+                    JSONObject object = new JSONObject();
+                    for (int j = 0; j < fields.size(); j++){
+                        if(row.getCell(j) != null){
+                            String field = fieldPair.get(fields.get(j));
+                            if(field == null){
+                                throw new RuntimeException("映射表字段映射不完全 该字段 '"+fields.get(j)+"'未添加映射关系");
+                            }
+                            object.put(field,decimals(row.getCell(j).toString()));
                         }
                     }
-                    continue;
-                }
-                JSONObject object = new JSONObject();
-                for (int j = 0; j < fields.size(); j++){
-                    if(row.getCell(j) != null){
-                        String field = fieldPair.get(fields.get(j));
-                        if(field == null){
-                            throw new RuntimeException("映射表字段映射不完全 该字段 '"+fields.get(j)+"'未添加映射关系");
+                    int count = 0;
+                    for (Object f:
+                            object.values()) {
+                        if(f == null || f.toString().trim().equals("")){
+                            count++;
                         }
-                        object.put(field,decimals(row.getCell(j).toString()));
                     }
-                }
-                int count = 0;
-                for (Object f:
-                object.values()) {
-                    if(f == null || f.toString().trim().equals("")){
-                        count++;
+                    if(object.size() != count){
+                        objects.add(object);
                     }
-                }
-                if(object.size() != count){
-                    objects.add(object);
                 }
             }
+            dataList = JSON.parseArray(objects.toJSONString(),target);
         }
-        dataList = JSON.parseArray(objects.toJSONString(),target);
+        catch (Exception e){
+            logger.error("excel解析出错",e);
+            throw  new RuntimeException("格式解析出错，请检查excel模板,只支持xlsx格式");
+        }
         stopWatch.stop();
         logger.info("解析excel并处理结束");
         logger.info(stopWatch.prettyPrint());
@@ -145,9 +151,28 @@ public class ImportExcelParseHandleUtil<T> implements AutoCloseable{
      * 移除上传的文件
      */
     @Override
-    public void close(){
+    public void close() throws IOException {
+        if(wb!=null){
+            wb.close();
+            if(input!=null){
+                try{
+                    input.close();
+                }catch (IOException e){
+                    
+                }
+            }
+        }else{
+            if(input!=null){
+                input.close();
+            }
+        }
         logger.info("进行异步回收文件...");
-        singleThreadExecutor.execute(() -> delDir(new File(directory)));
+        singleThreadExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                delDir(new File(directory));
+            }
+        });
     }
 
    private void delDir(File f) {
@@ -159,30 +184,33 @@ public class ImportExcelParseHandleUtil<T> implements AutoCloseable{
         if (f.isDirectory()) {
             // 获取子文件/目录
             File[] subFiles = f.listFiles();
-            // 遍历该目录
-            for (File subFile : subFiles) {
-                // 递归调用删除该文件: 如果这是一个空目录或文件, 一次递归就可删除. 如果这是一个非空目录, 多次
-                // 递归清空其内容后再删除
-                delDir(subFile);
+            if(subFiles != null){
+                // 遍历该目录
+                for (File subFile : subFiles) {
+                    // 递归调用删除该文件: 如果这是一个空目录或文件, 一次递归就可删除. 如果这是一个非空目录, 多次
+                    // 递归清空其内容后再删除
+                    delDir(subFile);
+                }
             }
         }
         // 删除空目录或文件
        if(!f.delete()){
-            logger.warning("删除文件失败 ，请检查文件:"+directory);
+            logger.error("删除文件失败 ，请检查文件:"+directory);
        }
        stopWatch.stop();
        logger.info("异步回收文件结束...");
        logger.info(stopWatch.prettyPrint());
     }
 
-    @FunctionalInterface
     public interface ExcelDataHandle<T> {
 
         String handle(List<T> list);
 
     }
-    
-    
+
+}
+
+
 
 @RestController
 @RequestMapping("shop/")
@@ -218,6 +246,6 @@ public class FoodImportTestController {
 
 }
 
-}
+
 
 
