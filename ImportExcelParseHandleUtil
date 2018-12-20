@@ -1,0 +1,223 @@
+package cn.wine.ms.food.wine.api.controller.shop;
+
+import cn.wine.model.base.exception.GlobalExceptionType;
+import cn.wine.model.base.util.AssertUtils;
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.assertj.core.util.Lists;
+import org.springframework.util.FileCopyUtils;
+import org.springframework.util.StopWatch;
+import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.multipart.MultipartHttpServletRequest;
+import javax.servlet.http.HttpServletRequest;
+import javax.validation.constraints.NotNull;
+import java.io.*;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.logging.Logger;
+
+/**
+ * @ClassName ImportExcelParseHandleUtil
+ * @Description
+ * @Author junqi.hu
+ * @Date 17:20
+ * @Version 1.0
+ **/
+public class ImportExcelParseHandleUtil<T> implements AutoCloseable{
+    private static ExecutorService singleThreadExecutor = Executors.newSingleThreadExecutor();
+    private Logger logger = Logger.getLogger(this.getClass().getName());
+    private File uploadFile ;
+    private String directory;
+    private List<T> dataList;
+    private String messages;
+    private  StopWatch stopWatch = new StopWatch("导入excel并解析处理");
+
+    public ImportExcelParseHandleUtil(@NotNull HttpServletRequest request,@NotNull String fileParamName,@NotNull String pathName) throws IOException {
+        logger.info("开始接收上传文件....");
+        stopWatch.start("上传文件");
+        request.setCharacterEncoding("UTF-8");
+        MultipartHttpServletRequest multipartRequest = (MultipartHttpServletRequest) request;
+        MultipartFile file = multipartRequest.getFile(fileParamName);
+        if(file == null){
+            throw new RuntimeException("文件参数名并未提取到文件");
+        }
+        String realFileName = file.getOriginalFilename();
+        // 获取路径
+        String ctxPath = request.getSession().getServletContext().getRealPath("/") +pathName+ "/";
+        File dirPath = new File(ctxPath);
+        if (!dirPath.exists()) {
+            AssertUtils.isTrue(dirPath.mkdir(),GlobalExceptionType.PARAMETER_ERROR,"导入失败，磁盘无法创建文件夹");
+        }
+        directory = ctxPath + realFileName+"-"+System.currentTimeMillis();
+        uploadFile = new File(directory);
+        FileCopyUtils.copy(file.getBytes(), uploadFile);
+        stopWatch.stop();
+        logger.info("上传文件结束");
+    }
+
+
+    public ImportExcelParseHandleUtil parseExcel(@NotNull Map<String,String> fieldPair, @NotNull Class<T> target) throws IOException {
+        logger.info("开始解析excel并处理....");
+        stopWatch.start("开始解析excel并处理");
+
+
+        FileInputStream input = new FileInputStream(directory); // 读取的文件路径
+        XSSFWorkbook wb = new XSSFWorkbook(new BufferedInputStream(input));
+        JSONArray objects = new JSONArray();
+        for(int k = 0; k<  wb.getNumberOfSheets(); k++){
+            Sheet sheet = wb.getSheetAt(k);
+            System.out.println("工作薄"+sheet.getSheetName());
+            // excel列名
+            List<String> fields = Lists.newArrayList();
+            for (int i = 1; i <= sheet.getLastRowNum(); i++) {// 有多少行
+                Row row = sheet.getRow(i);
+                if(i==1){
+                    for (int j = 0; j <= row.getLastCellNum(); j++){
+                        if(row.getCell(j) != null && !StringUtils.isEmpty(row.getCell(j).toString())){
+                            fields.add(row.getCell(j).toString());
+                        }
+                    }
+                    continue;
+                }
+                JSONObject object = new JSONObject();
+                for (int j = 0; j < fields.size(); j++){
+                    if(row.getCell(j) != null){
+                        String field = fieldPair.get(fields.get(j));
+                        if(field == null){
+                            throw new RuntimeException("映射表字段映射不完全 该字段 '"+fields.get(j)+"'未添加映射关系");
+                        }
+                        object.put(field,decimals(row.getCell(j).toString()));
+                    }
+                }
+                int count = 0;
+                for (Object f:
+                object.values()) {
+                    if(f == null || f.toString().trim().equals("")){
+                        count++;
+                    }
+                }
+                if(object.size() != count){
+                    objects.add(object);
+                }
+            }
+        }
+        dataList = JSON.parseArray(objects.toJSONString(),target);
+        stopWatch.stop();
+        logger.info("解析excel并处理结束");
+        logger.info(stopWatch.prettyPrint());
+        return this;
+    }
+
+    private static String decimals(String s) {
+        if(s!=null){
+            char[]  cahrs = s.toCharArray();
+            if(cahrs.length > 1){
+                if(cahrs[cahrs.length-1]=='0' && cahrs[cahrs.length-2]=='.'){
+                    try{
+                        Double.valueOf(s);
+                        return s.substring(0,s.length()-2);
+                    }catch (NumberFormatException e){
+                    }
+                }
+            }
+        }
+        return s;
+    }
+
+
+    public ImportExcelParseHandleUtil  handleData(ExcelDataHandle excelDataHandle){
+        messages = excelDataHandle.handle(dataList);
+        return this;
+    }
+
+    public String getMessages(){
+        return messages;
+    }
+
+    /**
+     * 移除上传的文件
+     */
+    @Override
+    public void close(){
+        logger.info("进行异步回收文件...");
+        singleThreadExecutor.execute(() -> delDir(new File(directory)));
+    }
+
+   private void delDir(File f) {
+        if(stopWatch.isRunning()){
+            stopWatch.stop();
+        }
+        stopWatch.start("进行异步回收文件");
+        // 判断是否是一个目录, 不是的话跳过, 直接删除; 如果是一个目录, 先将其内容清空.
+        if (f.isDirectory()) {
+            // 获取子文件/目录
+            File[] subFiles = f.listFiles();
+            // 遍历该目录
+            for (File subFile : subFiles) {
+                // 递归调用删除该文件: 如果这是一个空目录或文件, 一次递归就可删除. 如果这是一个非空目录, 多次
+                // 递归清空其内容后再删除
+                delDir(subFile);
+            }
+        }
+        // 删除空目录或文件
+       if(!f.delete()){
+            logger.warning("删除文件失败 ，请检查文件:"+directory);
+       }
+       stopWatch.stop();
+       logger.info("异步回收文件结束...");
+       logger.info(stopWatch.prettyPrint());
+    }
+
+    @FunctionalInterface
+    public interface ExcelDataHandle<T> {
+
+        String handle(List<T> list);
+
+    }
+    
+    
+
+@RestController
+@RequestMapping("shop/")
+@Api(tags = "导入测试")
+@Slf4j
+public class FoodImportTestController {
+    @Autowired
+    private ShopSyncJobHandler shopSyncJobHandler;
+
+    @RequestMapping("import")
+    public String test(HttpServletRequest request) throws IOException {
+
+
+        try (ImportExcelParseHandleUtil importExcelParseHandleUtil= new ImportExcelParseHandleUtil<ImportSaveFoodReqVo>(request,"fileData","foodExcel")){
+            HashMap<String ,String> map = new HashMap<>();
+            map.put("菜品名称","name");
+            map.put("菜品分类","foodCategoryId");
+            map.put("菜品价格","price");
+            map.put("菜品单位","unit");
+            map.put("菜品描述","desc");
+            map.put("菜品排序","rank");
+            map.put("当前库存","residueTotal");
+            map.put("最大库存","saleTotal");
+            importExcelParseHandleUtil
+                    .parseExcel(map,ImportSaveFoodReqVo.class)
+                    .handleData(list ->{
+                        System.out.println(JSON.toJSONString(list));
+                        return null;
+                    });
+        }
+        return "seccess";
+    }
+
+}
+
+}
+
+
