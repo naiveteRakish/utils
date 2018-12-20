@@ -224,7 +224,7 @@ public class FoodImportTestController {
     public String test(HttpServletRequest request) throws IOException {
 
 
-        try (ImportExcelParseHandleUtil importExcelParseHandleUtil= new ImportExcelParseHandleUtil<ImportSaveFoodReqVo>(request,"fileData","foodExcel")){
+        try (ImportExcelParseHandleUtil<ImportSaveFoodReqVo> importExcelParseHandleUtil= new ImportExcelParseHandleUtil(request,"fileData","foodExcel")){
             HashMap<String ,String> map = new HashMap<>();
             map.put("菜品名称","name");
             map.put("菜品分类","foodCategoryId");
@@ -236,7 +236,7 @@ public class FoodImportTestController {
             map.put("最大库存","saleTotal");
             importExcelParseHandleUtil
                     .parseExcel(map,ImportSaveFoodReqVo.class)
-                    .handleData(list ->{
+                    .handleData(list<ImportSaveFoodReqVo> ->{
                         System.out.println(JSON.toJSONString(list));
                         return null;
                     });
